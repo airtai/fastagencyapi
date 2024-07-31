@@ -9,6 +9,7 @@ from platform import system
 from typing import (
     Annotated,
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Callable,
     Dict,
@@ -24,10 +25,8 @@ import uvicorn
 from fastapi import FastAPI, Path
 from pydantic import BaseModel
 
-from fastagency.db.helpers import (
-    get_db_connection,
-    get_wasp_db_url,
-)
+from fastagency.db.base import DefaultDB
+from fastagency.db.inmemory import InMemoryBackendDB, InMemoryFrontendDB
 from fastagency.helpers import create_autogen, create_model_ref, get_model_by_ref
 from fastagency.models.agents.assistant import AssistantAgent
 from fastagency.models.agents.user_proxy import UserProxyAgent
@@ -46,21 +45,29 @@ from .helpers import add_random_sufix, expand_fixture, get_by_tag, tag, tag_list
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+@pytest_asyncio.fixture(scope="session", autouse=True)  # type: ignore[misc]
+async def set_default_db() -> AsyncGenerator[None, None]:
+    backend_db = InMemoryBackendDB()
+    frontend_db = InMemoryFrontendDB()
+
+    with (
+        DefaultDB.set(backend_db=backend_db, frontend_db=frontend_db),
+    ):
+        yield
+
+
 @pytest_asyncio.fixture(scope="session")  # type: ignore[misc]
 async def user_uuid() -> AsyncIterator[str]:
     try:
         random_id = random.randint(1, 1_000_000)
-        generated_uuid = str(uuid.uuid4())
-        wasp_db_url = await get_wasp_db_url()
-        async with get_db_connection(db_url=wasp_db_url) as db:
-            insert_query = (
-                'INSERT INTO "User" (email, username, uuid) VALUES ('
-                + f"'user{random_id}@airt.ai', 'user{random_id}', '{generated_uuid}')"
-            )
-            await db.execute_raw(insert_query)
+        generated_uuid = uuid.uuid4()
+        email = f"user{random_id}@airt.ai"
+        username = f"user{random_id}"
 
-            select_query = 'SELECT * FROM "User" WHERE uuid=' + f"'{generated_uuid}'"
-            user = await db.query_first(select_query)
+        await DefaultDB.frontend()._create_user(
+            user_uuid=generated_uuid, email=email, username=username
+        )
+        user = await DefaultDB.frontend().get_user(user_uuid=generated_uuid)
 
         yield user["uuid"]
     finally:

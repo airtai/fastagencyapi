@@ -6,7 +6,6 @@ from typing_extensions import TypeAlias
 
 from fastagency.openapi.client import Client
 
-from ...db.helpers import find_model_using_raw
 from ..base import Model
 from ..registry import Registry
 from ..toolboxes.toolbox import ToolboxRef
@@ -59,9 +58,8 @@ class AgentBaseModel(Model):
             if toolbox_property is None:
                 continue
 
-            toolbox_dict = await find_model_using_raw(toolbox_property.uuid)
-            toolbox_model = toolbox_property.get_data_model()(
-                **toolbox_dict["json_str"]
+            toolbox_model = await toolbox_property.get_data_model().from_db(
+                toolbox_property.uuid
             )
             client = await toolbox_model.create_autogen(toolbox_property.uuid, user_id)
             clients.append(client)

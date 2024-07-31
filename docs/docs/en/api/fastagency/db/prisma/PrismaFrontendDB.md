@@ -8,4 +8,4 @@ search:
   boost: 0.5
 ---
 
-::: fastagency.db.helpers.get_wasp_db_url
+::: fastagency.db.prisma.PrismaFrontendDB

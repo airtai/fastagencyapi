@@ -8,4 +8,4 @@ search:
   boost: 0.5
 ---
 
-::: fastagency.db.helpers.find_model_using_raw
+::: fastagency.db.base.FrontendDBProtocol

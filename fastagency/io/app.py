@@ -4,6 +4,8 @@ from typing import Optional
 from faststream import FastStream
 from faststream.nats import JStream, NatsBroker
 
+from ..db.prisma import faststream_lifespan
+
 nats_url: Optional[str] = environ.get("NATS_URL", None)  # type: ignore[assignment]
 if nats_url is None:
     domain: str = environ.get("DOMAIN")  # type: ignore[assignment]
@@ -15,8 +17,9 @@ password: str = environ.get("FASTSTREAM_NATS_PASSWORD")  # type: ignore[assignme
 print(f"{nats_url=}")  # noqa
 print("Starting IONats faststream app...")  # noqa
 
+
 broker = NatsBroker(nats_url, user=username, password=password)
-app = FastStream(broker)
+app = FastStream(broker, lifespan=faststream_lifespan)
 
 stream = JStream(
     name="FastAgency",

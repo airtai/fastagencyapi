@@ -1,3 +1,4 @@
+import random
 import uuid
 from typing import List, Optional
 from unittest.mock import AsyncMock, patch
@@ -6,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from fastagency.app import app, mask
+from fastagency.db.base import DefaultDB
 from fastagency.models.llms.azure import AzureOAIAPIKey
 from fastagency.saas_app_generator import SaasAppGenerator
 
@@ -104,10 +106,16 @@ class TestModelRoutes:
                 assert actual[i][key] == expected[i][key]
 
     @pytest.mark.asyncio()
-    async def test_setup_user(self, user_uuid: str) -> None:
+    async def test_setup_user(self) -> None:
+        random_id = random.randint(1, 1_000_000)
+        user_uuid = await DefaultDB.frontend()._create_user(
+            user_uuid=uuid.uuid4(),
+            email=f"user{random_id}@airt.ai",
+            username=f"user{random_id}",
+        )
         # Call setup route for user
         response = client.get(f"/user/{user_uuid}/setup")
-        assert response.status_code == 200, response
+        assert response.status_code == 200, response.text
         expected_setup = {
             "name": "WeatherToolbox",
             "openapi_url": "https://weather.tools.staging.fastagency.ai/openapi.json",
@@ -122,7 +130,7 @@ class TestModelRoutes:
         )
         assert response.status_code == 200
         expected_toolbox_model = {
-            "user_uuid": user_uuid,
+            "user_uuid": str(user_uuid),
             "type_name": "toolbox",
             "model_name": "Toolbox",
             "json_str": {
@@ -299,11 +307,17 @@ class TestModelRoutes:
         }
         type_name = "deployment"
         model_name = "Deployment"
-        model_uuid = str(uuid.uuid4())
+        model_uuid = uuid.uuid4()
 
         with (
-            patch("fastagency.app.get_user", side_effect=Exception()),
-            patch("fastagency.db.helpers.get_db_connection", side_effect=Exception()),
+            patch(
+                "fastagency.app.DefaultDB._frontend_db.get_user",
+                side_effect=Exception(),
+            ),
+            patch(
+                "fastagency.db.prisma.PrismaBackendDB._get_db_connection",
+                side_effect=Exception(),
+            ),
             patch("fastagency.helpers.deploy_saas_app") as mock_task,
         ):
             response = client.post(

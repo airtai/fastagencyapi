@@ -1,18 +1,30 @@
 import json
 import logging
 from os import environ
-from typing import Annotated, Any, Dict, List, Optional, Tuple, Union
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 from uuid import UUID
 
 import httpx
 import yaml
 from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Path
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse, Response
 from openai import AsyncAzureOpenAI
-from prisma.models import Model
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .auth_token.auth import DeploymentAuthToken, create_deployment_auth_token
-from .db.helpers import find_model_using_raw, get_db_connection, get_user
+from .db.base import DefaultDB, KeyNotFoundError
+from .db.prisma import fastapi_lifespan
 from .helpers import (
     add_model_to_user,
     create_model,
@@ -23,7 +35,18 @@ from .models.toolboxes.toolbox import Toolbox
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI()
+
+app = FastAPI(lifespan=fastapi_lifespan)
+
+
+@app.middleware("http")
+async def handle_keynotfounderror_middleware(
+    request: Request, call_next: Callable[[Request], Coroutine[Any, Any, Response]]
+) -> Response:
+    try:
+        return await call_next(request)
+    except KeyNotFoundError as e:
+        return JSONResponse(status_code=404, content={"detail": str(e)})
 
 
 @app.get("/models/schemas")
@@ -78,7 +101,7 @@ async def validate_secret_model(
 ) -> Dict[str, Any]:
     type: str = "secret"
 
-    found_model = await find_model_using_raw(model_uuid=model_uuid)
+    found_model = await DefaultDB.backend().find_model(model_uuid=model_uuid)
     if "api_key" in found_model["json_str"]:
         model["api_key"] = found_model["json_str"]["api_key"]
     try:
@@ -100,10 +123,9 @@ async def get_all_models(
     user_uuid: str,
     type_name: Optional[str] = None,
 ) -> List[Any]:
-    models = await get_all_models_for_user(user_uuid=user_uuid, type_name=type_name)
-
-    ta = TypeAdapter(List[Model])
-    ret_val_without_mask = ta.dump_python(models, serialize_as_any=True)  # type: ignore[call-arg]
+    ret_val_without_mask = await get_all_models_for_user(
+        user_uuid=user_uuid, type_name=type_name
+    )
 
     ret_val = []
     for model in ret_val_without_mask:
@@ -136,7 +158,7 @@ async def add_model(
 
 
 async def create_toolbox_for_new_user(user_uuid: Union[str, UUID]) -> Dict[str, Any]:
-    await get_user(user_uuid=user_uuid)  # type: ignore[arg-type]
+    await DefaultDB.frontend().get_user(user_uuid=user_uuid)  # type: ignore[arg-type]
 
     domain = environ.get("DOMAIN", "localhost")
     toolbox_openapi_url = (
@@ -181,18 +203,14 @@ async def update_model(
     registry = Registry.get_default()
     validated_model = registry.validate(type_name, model_name, model)
 
-    async with get_db_connection() as db:
-        found_model = await find_model_using_raw(model_uuid=model_uuid)
-
-        await db.model.update(
-            where={"uuid": found_model["uuid"]},  # type: ignore[arg-type]
-            data={  # type: ignore[typeddict-unknown-key]
-                "type_name": type_name,
-                "model_name": model_name,
-                "json_str": validated_model.model_dump_json(),  # type: ignore[typeddict-item]
-                "user_uuid": user_uuid,
-            },
-        )
+    found_model = await DefaultDB.backend().find_model(model_uuid=model_uuid)
+    await DefaultDB.backend().update_model(
+        model_uuid=found_model["uuid"],
+        user_uuid=user_uuid,
+        type_name=type_name,
+        model_name=model_name,
+        json_str=validated_model.model_dump_json(),
+    )
 
     return validated_model.model_dump()
 
@@ -201,13 +219,9 @@ async def update_model(
 async def models_delete(
     user_uuid: str, type_name: str, model_uuid: str
 ) -> Dict[str, Any]:
-    async with get_db_connection() as db:
-        found_model = await find_model_using_raw(model_uuid=model_uuid)
-        model = await db.model.delete(
-            where={"uuid": found_model["uuid"]}  # type: ignore[arg-type]
-        )
-
-    return model.json_str  # type: ignore
+    found_model = await DefaultDB.backend().find_model(model_uuid=model_uuid)
+    model = await DefaultDB.backend().delete_model(model_uuid=found_model["uuid"])
+    return model["json_str"]  # type: ignore
 
 
 def get_azure_llm_client() -> Tuple[AsyncAzureOpenAI, str]:
@@ -340,7 +354,7 @@ async def chat(request: ChatRequest) -> Dict[str, Any]:
 
 @app.post("/deployment/{deployment_uuid}/chat")
 async def deployment_chat(deployment_uuid: str) -> Dict[str, Any]:
-    found_model = await find_model_using_raw(model_uuid=deployment_uuid)
+    found_model = await DefaultDB.backend().find_model(model_uuid=deployment_uuid)
     team_name = found_model["json_str"]["name"]
     team_uuid = found_model["json_str"]["team"]["uuid"]
 
@@ -381,21 +395,22 @@ class DeploymentAuthTokenInfo(BaseModel):
 async def get_all_deployment_auth_tokens(
     user_uuid: str, deployment_uuid: str
 ) -> List[DeploymentAuthTokenInfo]:
-    user = await get_user(user_uuid=user_uuid)
-    deployment = await find_model_using_raw(model_uuid=deployment_uuid)
+    user = await DefaultDB.frontend().get_user(user_uuid=user_uuid)
+    deployment = await DefaultDB.backend().find_model(model_uuid=deployment_uuid)
 
     if user["uuid"] != deployment["user_uuid"]:
         raise HTTPException(  # pragma: no cover
             status_code=403, detail="User does not have access to this deployment"
         )
 
-    async with get_db_connection() as db:
-        auth_tokens = await db.authtoken.find_many(
-            where={"deployment_uuid": deployment_uuid, "user_uuid": user_uuid},
-        )
+    auth_tokens = await DefaultDB.backend().find_many_auth_token(
+        user_uuid=user_uuid, deployment_uuid=deployment_uuid
+    )
     return [
         DeploymentAuthTokenInfo(
-            uuid=auth_token.uuid, name=auth_token.name, expiry=auth_token.expiry
+            uuid=auth_token["uuid"],
+            name=auth_token["name"],
+            expiry=auth_token["expiry"],
         )
         for auth_token in auth_tokens
     ]
@@ -407,24 +422,21 @@ async def delete_deployment_auth_token(
     deployment_uuid: str,
     auth_token_uuid: str,
 ) -> DeploymentAuthTokenInfo:
-    user = await get_user(user_uuid=user_uuid)
-    deployment = await find_model_using_raw(model_uuid=deployment_uuid)
+    user = await DefaultDB.frontend().get_user(user_uuid=user_uuid)
+    deployment = await DefaultDB.backend().find_model(model_uuid=deployment_uuid)
 
     if user["uuid"] != deployment["user_uuid"]:
         raise HTTPException(  # pragma: no cover
             status_code=403, detail="User does not have access to this deployment"
         )
 
-    async with get_db_connection() as db:
-        auth_token = await db.authtoken.delete(
-            where={  # type: ignore[typeddict-unknown-key]
-                "uuid": auth_token_uuid,
-                "deployment_uuid": deployment_uuid,
-                "user_uuid": user_uuid,
-            },
-        )
+    auth_token = await DefaultDB.backend().delete_auth_token(
+        auth_token_uuid=auth_token_uuid,
+        deployment_uuid=deployment_uuid,
+        user_uuid=user_uuid,
+    )
     return DeploymentAuthTokenInfo(
-        uuid=auth_token.uuid,  # type: ignore[union-attr]
-        name=auth_token.name,  # type: ignore[union-attr]
-        expiry=auth_token.expiry,  # type: ignore[union-attr]
+        uuid=auth_token["uuid"],  # type: ignore[union-attr]
+        name=auth_token["name"],  # type: ignore[union-attr]
+        expiry=auth_token["expiry"],  # type: ignore[union-attr]
     )

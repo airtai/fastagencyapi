@@ -13,9 +13,7 @@ from fastagency.saas_app_generator import (
 )
 
 from .auth_token.auth import create_deployment_auth_token
-
-# from fastagency.app import add_model
-from .db.helpers import find_model_using_raw, get_db_connection, get_user
+from .db.base import DefaultDB
 from .models.base import Model, ObjectReference
 from .models.registry import Registry
 
@@ -23,7 +21,7 @@ T = TypeVar("T", bound=Model)
 
 
 async def get_model_by_uuid(model_uuid: Union[str, UUID]) -> Model:
-    model_dict = await find_model_using_raw(model_uuid=model_uuid)
+    model_dict = await DefaultDB.backend().find_model(model_uuid=model_uuid)
 
     registry = Registry.get_default()
     model = registry.validate(
@@ -43,13 +41,12 @@ async def validate_tokens_and_create_gh_repo(
     model: Dict[str, Any],
     model_uuid: str,
 ) -> SaasAppGenerator:
-    async with get_db_connection():
-        found_gh_token = await find_model_using_raw(
-            model_uuid=model["gh_token"]["uuid"]
-        )
-        found_fly_token = await find_model_using_raw(
-            model_uuid=model["fly_token"]["uuid"]
-        )
+    found_gh_token = await DefaultDB.backend().find_model(
+        model_uuid=model["gh_token"]["uuid"]
+    )
+    found_fly_token = await DefaultDB.backend().find_model(
+        model_uuid=model["fly_token"]["uuid"]
+    )
 
     found_gh_token_uuid = found_gh_token["json_str"]["gh_token"]
     found_fly_token_uuid = found_fly_token["json_str"]["fly_token"]
@@ -81,19 +78,15 @@ async def deploy_saas_app(
 
     await asyncify(saas_app.execute)()
 
-    async with get_db_connection() as db:
-        found_model = await find_model_using_raw(model_uuid=model_uuid)
-        found_model["json_str"]["app_deploy_status"] = "completed"
-
-        await db.model.update(
-            where={"uuid": found_model["uuid"]},  # type: ignore[arg-type]
-            data={  # type: ignore[typeddict-unknown-key]
-                "type_name": type_name,
-                "model_name": model_name,
-                "json_str": json.dumps(found_model["json_str"]),  # type: ignore[typeddict-item]
-                "user_uuid": user_uuid,
-            },
-        )
+    found_model = await DefaultDB.backend().find_model(model_uuid=model_uuid)
+    found_model["json_str"]["app_deploy_status"] = "completed"
+    await DefaultDB.backend().update_model(
+        model_uuid=found_model["uuid"],
+        user_uuid=user_uuid,
+        type_name=type_name,
+        model_name=model_name,
+        json_str=json.dumps(found_model["json_str"]),
+    )
 
 
 async def add_model_to_user(
@@ -125,17 +118,14 @@ async def add_model_to_user(
             updated_validated_model_dict["gh_repo_url"] = saas_app.gh_repo_url
             validated_model_json = json.dumps(updated_validated_model_dict)
 
-        await get_user(user_uuid=user_uuid)
-        async with get_db_connection() as db:
-            await db.model.create(
-                data={
-                    "uuid": model_uuid,
-                    "user_uuid": user_uuid,
-                    "type_name": type_name,
-                    "model_name": model_name,
-                    "json_str": validated_model_json,  # type: ignore[typeddict-item]
-                }
-            )
+        await DefaultDB.frontend().get_user(user_uuid=user_uuid)
+        await DefaultDB.backend().create_model(
+            model_uuid=model_uuid,
+            user_uuid=user_uuid,
+            type_name=type_name,
+            model_name=model_name,
+            json_str=validated_model_json,
+        )
 
         if saas_app is not None:
             background_tasks.add_task(
@@ -204,13 +194,10 @@ async def create_model_ref(
 async def get_all_models_for_user(
     user_uuid: Union[str, UUID],
     type_name: Optional[str] = None,
-) -> List[Any]:
-    filters: Dict[str, Any] = {"user_uuid": user_uuid}
-    if type_name:
-        filters["type_name"] = type_name
-
-    async with get_db_connection() as db:
-        models = await db.model.find_many(where=filters)  # type: ignore[arg-type]
+) -> List[Dict[str, Any]]:
+    models = await DefaultDB.backend().find_many_model(
+        user_uuid=user_uuid, type_name=type_name
+    )
 
     return models  # type: ignore[no-any-return]
 

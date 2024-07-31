@@ -4,11 +4,12 @@ import secrets
 import string
 import uuid
 from datetime import datetime, timedelta
+from typing import Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from fastagency.db.helpers import find_model_using_raw, get_db_connection, get_user
+from ..db.base import DefaultDB
 
 
 def generate_auth_token(length: int = 32) -> str:
@@ -75,13 +76,13 @@ async def parse_expiry(expiry: str) -> datetime:
 
 
 async def create_deployment_auth_token(
-    user_uuid: str,
-    deployment_uuid: str,
+    user_uuid: Union[str, uuid.UUID],
+    deployment_uuid: Union[str, uuid.UUID],
     name: str = "Default deployment token",
     expiry: str = "99999d",
 ) -> DeploymentAuthToken:
-    user = await get_user(user_uuid=user_uuid)
-    deployment = await find_model_using_raw(model_uuid=deployment_uuid)
+    user = await DefaultDB.frontend().get_user(user_uuid=user_uuid)
+    deployment = await DefaultDB.backend().find_model(model_uuid=deployment_uuid)
 
     if user["uuid"] != deployment["user_uuid"]:
         raise HTTPException(
@@ -92,17 +93,14 @@ async def create_deployment_auth_token(
     auth_token = generate_auth_token()
     hashed_token = hash_auth_token(auth_token)
 
-    async with get_db_connection() as db:
-        await db.authtoken.create(  # type: ignore[attr-defined]
-            data={
-                "uuid": str(uuid.uuid4()),
-                "name": name,
-                "user_uuid": user_uuid,
-                "deployment_uuid": deployment_uuid,
-                "auth_token": hashed_token,
-                "expiry": expiry,
-                "expires_at": expires_at,
-            }
-        )
+    await DefaultDB.backend().create_auth_token(
+        auth_token_uuid=uuid.uuid4(),
+        name=name,
+        user_uuid=user_uuid,
+        deployment_uuid=deployment_uuid,
+        hashed_auth_token=hashed_token,
+        expiry=expiry,
+        expires_at=expires_at,
+    )
 
     return DeploymentAuthToken(auth_token=auth_token)

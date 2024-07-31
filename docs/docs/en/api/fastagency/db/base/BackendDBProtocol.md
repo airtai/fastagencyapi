@@ -8,4 +8,4 @@ search:
   boost: 0.5
 ---
 
-::: fastagency.db.helpers.get_db_connection
+::: fastagency.db.base.BackendDBProtocol

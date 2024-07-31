@@ -20,6 +20,7 @@ search:
             - [get_all_models](api/fastagency/app/get_all_models.md)
             - [get_azure_llm_client](api/fastagency/app/get_azure_llm_client.md)
             - [get_models_schemas](api/fastagency/app/get_models_schemas.md)
+            - [handle_keynotfounderror_middleware](api/fastagency/app/handle_keynotfounderror_middleware.md)
             - [mask](api/fastagency/app/mask.md)
             - [models_delete](api/fastagency/app/models_delete.md)
             - [setup_user](api/fastagency/app/setup_user.md)
@@ -36,11 +37,21 @@ search:
                 - [parse_expiry](api/fastagency/auth_token/auth/parse_expiry.md)
                 - [verify_auth_token](api/fastagency/auth_token/auth/verify_auth_token.md)
         - db
-            - helpers
-                - [find_model_using_raw](api/fastagency/db/helpers/find_model_using_raw.md)
-                - [get_db_connection](api/fastagency/db/helpers/get_db_connection.md)
-                - [get_user](api/fastagency/db/helpers/get_user.md)
-                - [get_wasp_db_url](api/fastagency/db/helpers/get_wasp_db_url.md)
+            - base
+                - [BackendDBProtocol](api/fastagency/db/base/BackendDBProtocol.md)
+                - [DefaultDB](api/fastagency/db/base/DefaultDB.md)
+                - [FrontendDBProtocol](api/fastagency/db/base/FrontendDBProtocol.md)
+                - [KeyExistsError](api/fastagency/db/base/KeyExistsError.md)
+                - [KeyNotFoundError](api/fastagency/db/base/KeyNotFoundError.md)
+            - inmemory
+                - [InMemoryBackendDB](api/fastagency/db/inmemory/InMemoryBackendDB.md)
+                - [InMemoryFrontendDB](api/fastagency/db/inmemory/InMemoryFrontendDB.md)
+            - prisma
+                - [PrismaBackendDB](api/fastagency/db/prisma/PrismaBackendDB.md)
+                - [PrismaBaseDB](api/fastagency/db/prisma/PrismaBaseDB.md)
+                - [PrismaFrontendDB](api/fastagency/db/prisma/PrismaFrontendDB.md)
+                - [fastapi_lifespan](api/fastagency/db/prisma/fastapi_lifespan.md)
+                - [faststream_lifespan](api/fastagency/db/prisma/faststream_lifespan.md)
         - faststream_app
             - [ping_handler](api/fastagency/faststream_app/ping_handler.md)
         - helpers
