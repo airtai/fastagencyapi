@@ -39,7 +39,7 @@ def configure_static_file_serving(
     )
 
     @app.route(f"/{WEB_COMPONENTS_PATH_SEGMENT}/__fast_agency_internal__/<path:path>")
-    def serve_web_components_fast_agency(path: str) -> Response:
+    def serve_web_components_fast_agency(path: str) -> Response:  # type: ignore[misc]
         logger.info(f"Serve web components fast agency: {path}")
 
         root = Path(__file__).parents[3].resolve()
