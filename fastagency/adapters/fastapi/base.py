@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import nats
 import requests
 import websockets
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket
 from pydantic import BaseModel
 
 from fastagency.logging import get_logger
@@ -34,7 +34,6 @@ class WorkflowInfo(BaseModel):
     name: str
     description: str
 
-
 class FastAPIAdapter(MessageProcessorMixin):
     def __init__(
         self,
@@ -43,6 +42,9 @@ class FastAPIAdapter(MessageProcessorMixin):
         user: Optional[str] = None,
         password: Optional[str] = None,
         super_conversation: Optional["FastAPIAdapter"] = None,
+        initiate_chat_path: str = "/fastagency/initiate_chat",
+        discovery_path: str = "/fastagency/discovery",
+        ws_path: str = "/fastagency/ws",
     ) -> None:
         """Provider for NATS.
 
@@ -59,10 +61,14 @@ class FastAPIAdapter(MessageProcessorMixin):
 
         self.router = self.setup_routes()
 
+        self.initiate_chat_path = initiate_chat_path
+        self.discovery_path = discovery_path
+        self.ws_path = ws_path
+
     def setup_routes(self) -> APIRouter:
         router = APIRouter()
 
-        @router.post("/initiate_chat")
+        @router.post(self.initiate_chat_path)
         async def initiate_chat(
             initiate_chat: InititateChatModel,
         ) -> InitiateWorkflowModel:
@@ -87,7 +93,7 @@ class FastAPIAdapter(MessageProcessorMixin):
 
             return init_msg
 
-        @router.get("/discovery")
+        @router.get(self.discovery_path)
         def discovery() -> list[WorkflowInfo]:
             names = self.provider.names
             descriptions = [self.provider.get_description(name) for name in names]
@@ -95,6 +101,15 @@ class FastAPIAdapter(MessageProcessorMixin):
                 WorkflowInfo(name=name, description=description)
                 for name, description in zip(names, descriptions)
             ]
+        
+        @router.websocket(self.ws_path)
+        async def websocket_endpoint(websocket: WebSocket):
+            # read and write from NATS
+            raise NotImplementedError("websocket_endpoint")
+            # await websocket.accept()
+            # while True:
+            #     data = await websocket.receive_text()
+            #     await websocket.send_text(f"Message text was: {data}")
 
         return router
 
@@ -137,9 +152,13 @@ class FastAPIProvider(ProviderProtocol):
         fastapi_url: str,
         fastapi_user: Optional[str] = None,
         fastapi_password: Optional[str] = None,
-        nats_url: Optional[str] = None,
-        nats_user: Optional[str] = None,
-        nats_password: Optional[str] = None,
+        # nats_url: Optional[str] = None,
+        # nats_user: Optional[str] = None,
+        # nats_password: Optional[str] = None,
+        initiate_chat_path: str = "/fastagency/initiate_chat",
+        discovery_path: str = "/fastagency/discovery",
+        ws_path: str = "/fastagency/ws",
+        # todo: we need security context
     ) -> None:
         """Initialize the fastapi workflows."""
         self._workflows: dict[
@@ -152,17 +171,20 @@ class FastAPIProvider(ProviderProtocol):
         self.fastapi_user = fastapi_user
         self.fastapi_password = fastapi_password
 
-        self.nats_url = nats_url or "ws://localhost:9222"
+        # self.nats_url = nats_url or "ws://localhost:9222"
         if not self.nats_url.startswith(
             "ws://"  # nosemgrep
         ) and not self.nats_url.startswith("wss://"):
             raise ValueError(
                 f"NATS URL must start with ws:// or wss:// but got {self.nats_url}"  # nosemgrep
             )
-        self.nats_user = nats_user
-        self.nats_password = nats_password
+        # self.nats_user = nats_user
+        # self.nats_password = nats_password
 
         self.is_broker_running: bool = False
+
+        self.initiate_chat_path = initiate_chat_path
+        self.discovery_path = discovery_path
 
     def _send_initiate_chat_msg(
         self, workflow_name: str, params: dict[str, Any]
@@ -172,7 +194,7 @@ class FastAPIProvider(ProviderProtocol):
         payload = msg.model_dump()
 
         resp = requests.post(
-            f"{self.fastapi_url}/initiate_chat", json=payload, timeout=5
+            f"{self.fastapi_url}{self.initiate_chat_path}", json=payload, timeout=5
         )
         retval = InitiateWorkflowModel(**resp.json())
         return retval
@@ -194,26 +216,32 @@ class FastAPIProvider(ProviderProtocol):
         message: InputResponseModel,
     ) -> None:
         payload = message.model_dump_json()
-        protocol_message = f"PUB {subject} {len(payload)}\r\n{payload}\r\n"
-        await websocket.send(protocol_message)
-        logger.info(f"Message sent to topic {subject}: {message}")
+        # todo: reformat message to match the adapter
+        raise NotImplementedError("publish_websocket_message")
+        # protocol_message = f"PUB {subject} {len(payload)}\r\n{payload}\r\n"
+        # await websocket.send(protocol_message)
+        # logger.info(f"Message sent to topic {subject}: {message}")
 
     async def _parse_websocket_message(
         self, message: Union[bytes, str]
     ) -> Optional[dict[str, Any]]:
         message_str = message.decode() if isinstance(message, bytes) else message
 
-        if not message_str.startswith("MSG"):
-            return None
+        # todo: parse to match the adapter
+        raise NotImplementedError("parse_websocket_message")
+        # if not message_str.startswith("MSG"):
+        #     return None
 
-        pattern = r"\r\n(.*?)\r\n"
-        json_str = re.search(pattern, message_str, re.DOTALL).group(1)  # type: ignore [union-attr]
-        return json.loads(json_str)  # type: ignore [no-any-return]
+        # pattern = r"\r\n(.*?)\r\n"
+        # json_str = re.search(pattern, message_str, re.DOTALL).group(1)  # type: ignore [union-attr]
+        # return json.loads(json_str)  # type: ignore [no-any-return]
 
     async def _run_websocket_subscriber(
         self, ui: UI, from_server_subject: str, to_server_subject: str
     ) -> None:
-        async with websockets.connect(self.nats_url) as websocket:
+        # connect_url = self.nats_url
+        connect_url = f"{self.fastapi_url}{self.ws_path}"
+        async with websockets.connect(connect_url) as websocket:
             connect_message = await self._create_connect_message()
             await websocket.send(connect_message)
 
@@ -277,7 +305,7 @@ class FastAPIProvider(ProviderProtocol):
         return "FastAPIWorkflows.run() completed"
 
     def _get_workflow_info(self) -> list[dict[str, str]]:
-        resp = requests.get(f"{self.fastapi_url}/discovery", timeout=5)
+        resp = requests.get(f"{self.fastapi_url}/{self.discovery_path}", timeout=5)
         return resp.json()  # type: ignore [no-any-return]
 
     def _get_names(self) -> list[str]:
